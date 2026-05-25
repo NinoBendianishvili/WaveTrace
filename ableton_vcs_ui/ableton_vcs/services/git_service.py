@@ -3,6 +3,17 @@ from pathlib import Path
 
 
 class GitService:
+    def is_git_available(self):
+        try:
+            result = subprocess.run(
+                ["git", "--version"],
+                capture_output=True,
+                text=True,
+            )
+            return result.returncode == 0
+        except FileNotFoundError:
+            return False
+
     def run_git(self, project_path, args):
         project_path = Path(project_path)
 
@@ -10,7 +21,7 @@ class GitService:
             ["git"] + args,
             cwd=str(project_path),
             capture_output=True,
-            text=True
+            text=True,
         )
 
         if result.returncode != 0:
@@ -24,7 +35,7 @@ class GitService:
         if not (project_path / ".git").exists():
             self.run_git(project_path, ["init"])
 
-    def create_initial_commit(self, project_path, message):
+    def create_commit(self, project_path, message):
         project_path = Path(project_path)
 
         self.run_git(project_path, ["add", "."])
@@ -37,11 +48,14 @@ class GitService:
         self.run_git(
             project_path,
             [
-                "-c", "user.name=WaveTrace",
-                "-c", "user.email=wavetrace@local",
+                "-c",
+                "user.name=WaveTrace",
+                "-c",
+                "user.email=wavetrace@local",
                 "commit",
-                "-m", message
-            ]
+                "-m",
+                message,
+            ],
         )
 
         return self.get_head_hash(project_path)

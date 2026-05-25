@@ -5,6 +5,8 @@ from datetime import datetime
 from ableton_vcs.data.recent_projects_repository import RecentProjectsRepository
 from ableton_vcs.data.project_metadata_repository import ProjectMetadataRepository
 from ableton_vcs.services.git_service import GitService
+from ableton_vcs.services.als_track_service import AlsTrackService
+from ableton_vcs.services.track_id_service import TrackIdService
 
 
 class ProjectService:
@@ -12,6 +14,8 @@ class ProjectService:
         self.recent_projects_repository = RecentProjectsRepository()
         self.project_metadata_repository = ProjectMetadataRepository()
         self.git_service = GitService()
+        self.als_track_service = AlsTrackService()
+        self.track_id_service = TrackIdService()
 
     def remember_project(self, project_path):
         self.recent_projects_repository.save_project(project_path)
@@ -63,6 +67,11 @@ class ProjectService:
     def initialize_project(self, project_path, first_commit_name, first_commit_comment, audio_path):
         project_path = Path(project_path).resolve()
 
+        if not self.git_service.is_git_available():
+            raise RuntimeError(
+                "Git is not installed or not available on this computer."
+            )
+
         wavetrace_dir = project_path / ".wavetrace"
         wavetrace_dir.mkdir(parents=True, exist_ok=True)
 
@@ -73,7 +82,7 @@ class ProjectService:
         link_data = {
             "project_id": project_id,
             "project_name": project_path.name,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M")
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         }
 
         link_file = wavetrace_dir / "project.json"
@@ -81,21 +90,77 @@ class ProjectService:
         with link_file.open("w", encoding="utf-8") as file:
             json.dump(link_data, file, indent=4)
 
-        git_commit_hash = self.git_service.create_initial_commit(
-            project_path,
-            first_commit_name
+        metadata = self.project_metadata_repository.create_empty_project_metadata(
+            project_path=project_path,
+            project_id=project_id,
         )
 
-        metadata = self.project_metadata_repository.create_project_metadata(
+        metadata = self.create_commit(
             project_path=project_path,
-            first_commit_name=first_commit_name,
-            first_commit_comment=first_commit_comment,
+            name=first_commit_name,
+            comment=first_commit_comment,
             audio_path=audio_path,
-            git_commit_hash=git_commit_hash,
-            project_id=project_id
+            metadata=metadata,
         )
 
         self.remember_project(project_path)
+
+        return metadata
+
+    def create_commit(self, project_path, name, comment, audio_path="", metadata=None):
+        project_path = Path(project_path).resolve()
+
+        if metadata is None:
+            metadata = self.load_project_metadata(project_path)
+
+        if metadata is None:
+            raise RuntimeError("Project metadata could not be loaded.")
+
+        extracted_data = self.als_track_service.extract_current_project_tracks(project_path)
+
+        parent_commit = metadata["commits"][-1] if metadata["commits"] else None
+        previous_track_map = parent_commit["track_map"] if parent_commit else {}
+
+        updated_track_data = self.track_id_service.build_track_map_for_commit(
+            current_tracks=extracted_data["tracks"],
+            previous_track_map=previous_track_map,
+            global_track_id_counter=metadata.get("global_track_id_counter", 0),
+        )
+
+        git_commit_hash = self.git_service.create_commit(
+            project_path=project_path,
+            message=name,
+        )
+
+        short_hash = git_commit_hash[:8] if git_commit_hash else f"commit{len(metadata['commits']) + 1}"
+        now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        previous_commit_hash = parent_commit["hash"] if parent_commit else None
+
+        commit_data = {
+            "hash": short_hash,
+            "git_hash": git_commit_hash,
+            "name": name,
+            "date": now,
+            "comment": comment,
+            "audio_path": audio_path,
+            "predecessors": [previous_commit_hash] if previous_commit_hash else [],
+            "successors": [],
+            "lane": 0,
+            "y": max(360 - len(metadata["commits"]) * 120, 40),
+
+            "als_path": extracted_data["als_path"],
+            "global_track_id_counter": updated_track_data["global_track_id_counter"],
+            "track_map": updated_track_data["track_map"],
+        }
+
+        if previous_commit_hash:
+            parent_commit["successors"].append(short_hash)
+
+        metadata = self.project_metadata_repository.append_commit(
+            metadata=metadata,
+            commit_data=commit_data,
+        )
 
         return metadata
 
