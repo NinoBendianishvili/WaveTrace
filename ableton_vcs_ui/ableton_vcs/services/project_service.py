@@ -8,6 +8,7 @@ from ableton_vcs.services.git_service import GitService
 from ableton_vcs.services.als_track_service import AlsTrackService
 from ableton_vcs.services.track_id_service import TrackIdService
 from ableton_vcs.services.file_open_service import FileOpenService
+from ableton_vcs.services.merge_track_service import MergeTrackService
 
 
 class ProjectService:
@@ -18,6 +19,7 @@ class ProjectService:
         self.als_track_service = AlsTrackService()
         self.track_id_service = TrackIdService()
         self.file_open_service = FileOpenService()
+        self.merge_track_service = MergeTrackService()
 
     def remember_project(self, project_path):
         self.recent_projects_repository.save_project(project_path)
@@ -274,3 +276,9 @@ class ProjectService:
 
     def load_project_metadata(self, project_path):
         return self.project_metadata_repository.load_from_project_folder(project_path)
+    
+    def compare_commits_for_merge(self, left_commit, right_commit):
+        return self.merge_track_service.compare_track_maps(
+            left_commit=left_commit,
+            right_commit=right_commit
+        )

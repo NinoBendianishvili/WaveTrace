@@ -269,13 +269,19 @@ class MainSurface(GlassCard):
         if not first_commit or not second_commit:
             return
 
+        comparison_rows = self.project_service.compare_commits_for_merge(
+            first_commit,
+            second_commit
+        )
+
         if self.merge_layout_widget is not None:
             self.content_host.removeWidget(self.merge_layout_widget)
             self.merge_layout_widget.deleteLater()
 
         self.merge_layout_widget = MergePlaceholder(
-            first_commit["name"],
-            second_commit["name"]
+            first_commit,
+            second_commit,
+            comparison_rows
         )
 
         self.content_host.addWidget(self.merge_layout_widget)
