@@ -27,10 +27,18 @@ class ProjectMetadataRepository:
             "last_known_path": str(project_path),
             "metadata_path": str(metadata_path),
             "created_at": now,
-            "branch_label": "MAIN",
+
+            "selected_branch": "MAIN",
             "selected_commit": "",
+            "branches": {
+                "MAIN": ""
+            },
+
+            "working_base_commit": "",
+            "working_mode": "normal",
+
             "global_track_id_counter": 0,
-            "commits": [],
+            "commits": []
         }
 
         self.save_metadata(metadata)
@@ -40,6 +48,9 @@ class ProjectMetadataRepository:
         metadata["commits"].append(commit_data)
         metadata["selected_commit"] = commit_data["hash"]
         metadata["global_track_id_counter"] = commit_data["global_track_id_counter"]
+
+        selected_branch = metadata["selected_branch"]
+        metadata["branches"][selected_branch] = commit_data["hash"]
 
         self.save_metadata(metadata)
         return metadata

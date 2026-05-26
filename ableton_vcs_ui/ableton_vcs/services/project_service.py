@@ -7,6 +7,7 @@ from ableton_vcs.data.project_metadata_repository import ProjectMetadataReposito
 from ableton_vcs.services.git_service import GitService
 from ableton_vcs.services.als_track_service import AlsTrackService
 from ableton_vcs.services.track_id_service import TrackIdService
+from ableton_vcs.services.file_open_service import FileOpenService
 
 
 class ProjectService:
@@ -16,6 +17,7 @@ class ProjectService:
         self.git_service = GitService()
         self.als_track_service = AlsTrackService()
         self.track_id_service = TrackIdService()
+        self.file_open_service = FileOpenService()
 
     def remember_project(self, project_path):
         self.recent_projects_repository.save_project(project_path)
@@ -68,9 +70,7 @@ class ProjectService:
         project_path = Path(project_path).resolve()
 
         if not self.git_service.is_git_available():
-            raise RuntimeError(
-                "Git is not installed or not available on this computer."
-            )
+            raise RuntimeError("Git is not installed or not available on this computer.")
 
         wavetrace_dir = project_path / ".wavetrace"
         wavetrace_dir.mkdir(parents=True, exist_ok=True)
@@ -107,7 +107,82 @@ class ProjectService:
 
         return metadata
 
-    def create_commit(self, project_path, name, comment, audio_path="", metadata=None):
+    def get_commit_by_hash(self, metadata, commit_hash):
+        for commit in metadata.get("commits", []):
+            if commit.get("hash") == commit_hash:
+                return commit
+
+        return None
+
+    def resolve_commit_als_path(self, project_path, commit):
+        project_path = Path(project_path).resolve()
+
+        saved_als_path = commit.get("als_path", "")
+
+        if saved_als_path:
+            saved_als_path = Path(saved_als_path)
+            candidate = project_path / saved_als_path.name
+
+            if candidate.exists():
+                return candidate
+
+            if saved_als_path.exists():
+                return saved_als_path
+
+        als_files = sorted(project_path.glob("*.als"))
+
+        if not als_files:
+            raise FileNotFoundError("No .als file found after checking out this commit.")
+
+        return als_files[0]
+
+    def open_commit_version(self, project_path, commit_hash):
+        project_path = Path(project_path).resolve()
+        metadata = self.load_project_metadata(project_path)
+
+        if metadata is None:
+            raise RuntimeError("Project metadata could not be loaded.")
+
+        commit = self.get_commit_by_hash(metadata, commit_hash)
+
+        if not commit:
+            raise RuntimeError("Selected commit could not be found in metadata.")
+
+        git_hash = commit.get("git_hash")
+
+        if not git_hash:
+            raise RuntimeError("Selected commit does not have a Git hash.")
+
+        if self.git_service.has_uncommitted_changes(project_path):
+            raise RuntimeError(
+                "This project has uncommitted changes. Please commit or discard them before opening another version."
+            )
+
+        selected_branch = metadata.get("selected_branch", "MAIN")
+        branch_head = metadata.get("branches", {}).get(selected_branch)
+
+        if commit_hash == branch_head:
+            self.git_service.switch_branch(project_path, selected_branch)
+
+            metadata["working_base_commit"] = ""
+            metadata["working_mode"] = "normal"
+            metadata["selected_commit"] = commit["hash"]
+
+        else:
+            self.git_service.checkout_commit_detached(project_path, git_hash)
+
+            metadata["working_base_commit"] = commit["hash"]
+            metadata["working_mode"] = "detached_experiment"
+            metadata["selected_commit"] = commit["hash"]
+
+        self.project_metadata_repository.save_metadata(metadata)
+
+        als_path = self.resolve_commit_als_path(project_path, commit)
+        self.file_open_service.open_file(als_path)
+
+        return str(als_path)
+
+    def create_commit(self, project_path, name, comment, audio_path="", metadata=None, branch_name=None):
         project_path = Path(project_path).resolve()
 
         if metadata is None:
@@ -116,9 +191,33 @@ class ProjectService:
         if metadata is None:
             raise RuntimeError("Project metadata could not be loaded.")
 
+        working_base_commit_hash = metadata.get("working_base_commit", "")
+        working_mode = metadata.get("working_mode", "normal")
+
+        if working_mode == "detached_experiment":
+            if not branch_name:
+                raise RuntimeError("Branch name is required when committing from an older version.")
+
+            self.git_service.create_branch_from_current_head(project_path, branch_name)
+
+            metadata["selected_branch"] = branch_name
+            metadata.setdefault("branches", {})
+            metadata["branches"][branch_name] = working_base_commit_hash
+
+            parent_commit = self.get_commit_by_hash(metadata, working_base_commit_hash)
+
+            if parent_commit is None:
+                raise RuntimeError("Working base commit could not be found.")
+
+        else:
+            selected_commit_hash = metadata.get("selected_commit", "")
+            parent_commit = self.get_commit_by_hash(metadata, selected_commit_hash)
+
+            if parent_commit is None and metadata.get("commits"):
+                parent_commit = metadata["commits"][-1]
+
         extracted_data = self.als_track_service.extract_current_project_tracks(project_path)
 
-        parent_commit = metadata["commits"][-1] if metadata["commits"] else None
         previous_track_map = parent_commit["track_map"] if parent_commit else {}
 
         updated_track_data = self.track_id_service.build_track_map_for_commit(
@@ -136,6 +235,8 @@ class ProjectService:
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
 
         previous_commit_hash = parent_commit["hash"] if parent_commit else None
+        parent_lane = parent_commit.get("lane", 0) if parent_commit else 0
+        is_branch_commit = working_mode == "detached_experiment"
 
         commit_data = {
             "hash": short_hash,
@@ -146,16 +247,23 @@ class ProjectService:
             "audio_path": audio_path,
             "predecessors": [previous_commit_hash] if previous_commit_hash else [],
             "successors": [],
-            "lane": 0,
+            "lane": parent_lane + 1 if is_branch_commit else parent_lane,
             "y": max(360 - len(metadata["commits"]) * 120, 40),
 
+            "branch": metadata.get("selected_branch", "MAIN"),
             "als_path": extracted_data["als_path"],
             "global_track_id_counter": updated_track_data["global_track_id_counter"],
             "track_map": updated_track_data["track_map"],
         }
 
         if previous_commit_hash:
-            parent_commit["successors"].append(short_hash)
+            parent_commit.setdefault("successors", [])
+
+            if short_hash not in parent_commit["successors"]:
+                parent_commit["successors"].append(short_hash)
+
+        metadata["working_base_commit"] = ""
+        metadata["working_mode"] = "normal"
 
         metadata = self.project_metadata_repository.append_commit(
             metadata=metadata,

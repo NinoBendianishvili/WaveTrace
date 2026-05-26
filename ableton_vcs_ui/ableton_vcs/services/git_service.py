@@ -35,6 +35,28 @@ class GitService:
         if not (project_path / ".git").exists():
             self.run_git(project_path, ["init"])
 
+    def has_uncommitted_changes(self, project_path):
+        status = self.run_git(project_path, ["status", "--porcelain"])
+        return bool(status.strip())
+
+    def checkout_commit_detached(self, project_path, git_hash):
+        if not git_hash:
+            raise RuntimeError("Selected commit does not have a Git hash.")
+
+        self.run_git(project_path, ["checkout", "--detach", git_hash])
+
+    def switch_branch(self, project_path, branch_name):
+        if not branch_name:
+            raise RuntimeError("Branch name cannot be empty.")
+
+        self.run_git(project_path, ["switch", branch_name])
+
+    def create_branch_from_current_head(self, project_path, branch_name):
+        if not branch_name:
+            raise RuntimeError("Branch name cannot be empty.")
+
+        self.run_git(project_path, ["switch", "-c", branch_name])
+
     def create_commit(self, project_path, message):
         project_path = Path(project_path)
 
@@ -43,7 +65,7 @@ class GitService:
         status = self.run_git(project_path, ["status", "--porcelain"])
 
         if not status:
-            return self.get_head_hash(project_path)
+            raise RuntimeError("There are no project changes to commit.")
 
         self.run_git(
             project_path,
@@ -63,5 +85,11 @@ class GitService:
     def get_head_hash(self, project_path):
         try:
             return self.run_git(project_path, ["rev-parse", "HEAD"])
+        except RuntimeError:
+            return ""
+
+    def get_current_branch(self, project_path):
+        try:
+            return self.run_git(project_path, ["branch", "--show-current"])
         except RuntimeError:
             return ""

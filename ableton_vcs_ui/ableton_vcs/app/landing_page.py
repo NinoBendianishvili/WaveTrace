@@ -1,8 +1,16 @@
 from pathlib import Path
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QMessageBox,
+    QDialog,
+    QVBoxLayout,
+    QWidget,
+    QInputDialog,
+)
+
 from ableton_vcs.config.theme import *
 from ableton_vcs.data.commit_repository import CommitRepository
-from ableton_vcs.ui.common.pill_button import PillButton
 from ableton_vcs.ui.screens.main_surface import MainSurface
 from ableton_vcs.ui.dialogs.commit_form_dialog import CommitFormDialog
 from ableton_vcs.ui.common.app_title import AppTitle
@@ -12,8 +20,10 @@ from ableton_vcs.services.project_service import ProjectService
 class LandingPage(QWidget):
     def __init__(self):
         super().__init__()
-        self.repository = CommitRepository(Path(__file__).resolve().parents[2] / "dummy_commits.json")
+
+        self.repository = CommitRepository()
         self.project_service = ProjectService()
+
         self.setAutoFillBackground(True)
         self.build_ui()
 
@@ -25,14 +35,18 @@ class LandingPage(QWidget):
             QMessageBox {{ background-color: {BG_MAIN}; }}
             """
         )
+
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 22)
         root.setSpacing(16)
+
         root.addWidget(AppTitle())
+
         self.surface = MainSurface(self.repository, self.project_service)
         root.addWidget(self.surface, 1)
+
         self.surface.header.browse_button.clicked.connect(self.browse_folder)
-        self.surface.header.open_button.clicked.connect(self.open_project)
+        self.surface.header.open_button.clicked.connect(self.open_selected_commit)
         self.surface.header.merge_button.clicked.connect(self.merge_action)
         self.surface.header.commit_button.clicked.connect(self.commit_pending_changes)
         self.surface.header.close_button.clicked.connect(self.close_merge_mode)
@@ -48,91 +62,182 @@ class LandingPage(QWidget):
         )
 
         if folder:
-            self.surface.header.folder_input.set_path(folder)
+            self.open_project_folder(folder)
 
-            project_state = self.project_service.get_project_state(folder)
+    def open_project_folder(self, folder):
+        if not folder:
+            return
 
-            if project_state == "versioned":
-                metadata = self.project_service.load_project_metadata(folder)
+        self.surface.header.folder_input.set_path(folder)
 
-                if metadata is None:
-                    QMessageBox.warning(
-                        self,
-                        "WaveTrace",
-                        "This project has a WaveTrace link, but its metadata file could not be found."
-                    )
-                    return
+        project_state = self.project_service.get_project_state(folder)
 
-                self.surface.load_versioned_project(folder, metadata)
+        if project_state == "versioned":
+            metadata = self.project_service.load_project_metadata(folder)
 
-            elif project_state == "git_only":
-                self.surface.current_folder = folder
-                self.surface.current_project_state = "uninitialized"
-                self.surface.header.set_mode("uninitialized")
-                self.surface.show_screen("uninitialized")
-
-                QMessageBox.information(
+            if metadata is None:
+                QMessageBox.warning(
                     self,
-                    "Git repository found",
-                    "This folder already has Git, but it is not initialized for WaveTrace yet."
+                    "WaveTrace",
+                    "This project has a WaveTrace link, but its metadata file could not be found."
                 )
+                return
 
-            elif project_state == "uninitialized":
-                self.surface.current_folder = folder
-                self.surface.current_project_state = "uninitialized"
-                self.surface.header.set_mode("uninitialized")
-                self.surface.show_screen("uninitialized")
+            self.surface.load_versioned_project(folder, metadata)
 
-            elif project_state == "not_ableton_project":
-                self.surface.current_folder = folder
-                self.surface.current_project_state = "empty"
-                self.surface.header.set_mode("default")
-                self.surface.show_screen("empty")
+        elif project_state == "git_only":
+            self.surface.load_uninitialized_project(folder)
 
-            else:
-                self.surface.current_folder = ""
-                self.surface.current_project_state = "empty"
-                self.surface.header.set_mode("default")
-                self.surface.show_screen("empty")
+            QMessageBox.information(
+                self,
+                "Git repository found",
+                "This folder already has Git, but it is not initialized for WaveTrace yet."
+            )
 
-    def open_project(self):
-        self.surface.set_project_from_path(self.surface.header.folder_input.label.text())
+        elif project_state == "uninitialized":
+            self.surface.load_uninitialized_project(folder)
+
+        elif project_state == "not_ableton_project":
+            self.surface.load_empty_project(folder)
+
+            QMessageBox.information(
+                self,
+                "Not an Ableton project",
+                "This folder does not contain an .als file."
+            )
+
+        else:
+            self.surface.load_empty_project("")
+
+    def open_selected_commit(self):
+        if self.surface.current_project_state != "versioned":
+            QMessageBox.information(
+                self,
+                "Open",
+                "Please open or initialize a WaveTrace project first."
+            )
+            return
+
+        selected_hash = self.surface.default_content.graph_panel.graph.selected_hash
+
+        if not selected_hash:
+            selected_hash = self.surface.repository.selected_commit_hash
+
+        if not selected_hash:
+            QMessageBox.information(
+                self,
+                "Open",
+                "Please select a commit first."
+            )
+            return
+
+        try:
+            als_path = self.project_service.open_commit_version(
+                project_path=self.surface.current_folder,
+                commit_hash=selected_hash
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Open failed",
+                str(error)
+            )
+            return
+
+        metadata = self.project_service.load_project_metadata(self.surface.current_folder)
+
+        if metadata is not None:
+            self.surface.load_versioned_project(self.surface.current_folder, metadata)
+
+        QMessageBox.information(
+            self,
+            "Version opened",
+            f"Opened Ableton file:\n{als_path}"
+        )
 
     def merge_action(self):
         self.surface.enter_merge_mode()
 
     def commit_pending_changes(self):
-        repo = self.surface.active_repository()
-        graph = self.surface.default_content.graph_panel.graph
-        selected_commit = repo.get_commit(graph.selected_hash)
-        if not selected_commit or not selected_commit.get("is_pending"):
+        if self.surface.current_project_state != "versioned":
+            QMessageBox.information(
+                self,
+                "Commit",
+                "Please open or initialize a WaveTrace project first."
+            )
+            return
+
+        if not self.surface.current_folder:
+            QMessageBox.warning(
+                self,
+                "Commit",
+                "No project folder is selected."
+            )
             return
 
         dialog = CommitFormDialog("New commit", self)
         dialog.name_input.setPlaceholderText("e.g. vocal level fixes")
         dialog.comment_input.setPlaceholderText("Describe what changed in this version...")
+
         if dialog.exec() != QDialog.Accepted:
             return
 
-        old_hash = selected_commit["hash"]
-        new_hash = f"c{len([commit for commit in repo.commits if not commit.get('is_pending')]) + 1}"
+        commit_name = dialog.name_input.text().strip() or "New commit"
+        commit_comment = dialog.comment_input.toPlainText().strip() or "Committed latest changes."
+        wav_path = dialog.selected_wav_path or ""
 
-        for commit in repo.commits:
-            commit["successors"] = [new_hash if successor_hash == old_hash else successor_hash for successor_hash in commit["successors"]]
-            commit["predecessors"] = [new_hash if predecessor_hash == old_hash else predecessor_hash for predecessor_hash in commit["predecessors"]]
+        metadata_before_commit = self.project_service.load_project_metadata(
+            self.surface.current_folder
+        )
 
-        selected_commit["hash"] = new_hash
-        selected_commit["name"] = dialog.name_input.text().strip() or "New commit"
-        selected_commit["comment"] = dialog.comment_input.toPlainText().strip() or "Committed latest changes."
-        selected_commit["date"] = "2026-04-21 12:00"
-        selected_commit["audio_path"] = dialog.selected_wav_path or selected_commit["audio_path"]
-        selected_commit["is_pending"] = False
-        repo.data["selected_commit"] = new_hash
-        repo.refresh_from_data()
-        self.surface.default_content.set_repository(repo)
-        self.surface.header.set_mode(self.surface.current_project_state)
-        self.surface.header.set_commit_enabled(False)
-        self.surface.handle_commit_selected(new_hash)
+        branch_name = None
+
+        if metadata_before_commit and metadata_before_commit.get("working_mode") == "detached_experiment":
+            branch_name, ok = QInputDialog.getText(
+                self,
+                "Save as branch",
+                "You are committing changes from an older version.\nEnter a branch name:"
+            )
+
+            if not ok:
+                return
+
+            branch_name = branch_name.strip()
+
+            if not branch_name:
+                QMessageBox.warning(
+                    self,
+                    "Branch name required",
+                    "Please enter a branch name to save this version."
+                )
+                return
+
+        try:
+            metadata = self.project_service.create_commit(
+                project_path=self.surface.current_folder,
+                name=commit_name,
+                comment=commit_comment,
+                audio_path=wav_path,
+                branch_name=branch_name
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Commit failed",
+                str(error)
+            )
+            return
+
+        self.surface.load_versioned_project(
+            self.surface.current_folder,
+            metadata
+        )
+
+        QMessageBox.information(
+            self,
+            "Commit created",
+            "New WaveTrace version was committed successfully."
+        )
 
     def close_merge_mode(self):
         self.surface.exit_merge_mode()
@@ -144,10 +249,17 @@ class LandingPage(QWidget):
     def commit_merge(self):
         if self.surface.merge_layout_widget is None or not self.surface.merge_layout_widget.isVisible():
             return
+
         dialog = CommitFormDialog("New merge commit", self)
         dialog.name_input.setPlaceholderText("e.g. merged vocal branch")
         dialog.comment_input.setPlaceholderText("Describe what this merge includes...")
+
         result = dialog.exec()
+
         if result == QDialog.Accepted:
-            QMessageBox.information(self, "Demo", "Demo merge committed. Returning to main page.")
+            QMessageBox.information(
+                self,
+                "Demo",
+                "Demo merge committed. Returning to main page."
+            )
             self.surface.exit_merge_mode()
