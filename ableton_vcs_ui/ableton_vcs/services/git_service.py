@@ -36,9 +36,18 @@ class GitService:
             self.run_git(project_path, ["init"])
 
     def has_uncommitted_changes(self, project_path):
-        status = self.run_git(project_path, ["status", "--porcelain"])
+        status = self.run_git(
+            project_path,
+            ["status", "--porcelain", "--untracked-files=no"]
+        )
+
         return bool(status.strip())
 
+
+    def discard_uncommitted_changes(self, project_path):
+        self.run_git(project_path, ["reset", "--hard", "HEAD"])
+
+        
     def checkout_commit_detached(self, project_path, git_hash):
         if not git_hash:
             raise RuntimeError("Selected commit does not have a Git hash.")

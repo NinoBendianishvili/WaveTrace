@@ -1,6 +1,6 @@
 import json
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 from ableton_vcs.data.recent_projects_repository import RecentProjectsRepository
 from ableton_vcs.data.project_metadata_repository import ProjectMetadataRepository
@@ -9,6 +9,7 @@ from ableton_vcs.services.als_track_service import AlsTrackService
 from ableton_vcs.services.track_id_service import TrackIdService
 from ableton_vcs.services.file_open_service import FileOpenService
 from ableton_vcs.services.merge_track_service import MergeTrackService
+from ableton_vcs.services.audio_snapshot_service import AudioSnapshotService
 
 
 class ProjectService:
@@ -20,6 +21,7 @@ class ProjectService:
         self.track_id_service = TrackIdService()
         self.file_open_service = FileOpenService()
         self.merge_track_service = MergeTrackService()
+        self.audio_snapshot_service = AudioSnapshotService()
 
     def remember_project(self, project_path):
         self.recent_projects_repository.save_project(project_path)
@@ -68,6 +70,22 @@ class ProjectService:
 
         return "uninitialized"
 
+    def has_uncommitted_changes(self, project_path):
+        project_path = Path(project_path).resolve()
+
+        if not self.has_git_repository(project_path):
+            return False
+
+        return self.git_service.has_uncommitted_changes(project_path)
+
+    def discard_uncommitted_changes(self, project_path):
+        project_path = Path(project_path).resolve()
+
+        if not self.has_git_repository(project_path):
+            raise RuntimeError("This project is not a Git repository.")
+
+        self.git_service.discard_uncommitted_changes(project_path)
+
     def initialize_project(self, project_path, first_commit_name, first_commit_comment, audio_path):
         project_path = Path(project_path).resolve()
 
@@ -76,6 +94,8 @@ class ProjectService:
 
         wavetrace_dir = project_path / ".wavetrace"
         wavetrace_dir.mkdir(parents=True, exist_ok=True)
+
+        self.ensure_project_gitignore(project_path)
 
         self.git_service.init_repository(project_path)
 
@@ -160,12 +180,15 @@ class ProjectService:
                 "This project has uncommitted changes. Please commit or discard them before opening another version."
             )
 
-        selected_branch = metadata.get("selected_branch", "MAIN")
-        branch_head = metadata.get("branches", {}).get(selected_branch)
+        commit_branch = commit.get("branch", "MAIN")
+        metadata.setdefault("branches", {})
+
+        branch_head = metadata["branches"].get(commit_branch)
 
         if commit_hash == branch_head:
-            self.git_service.switch_branch(project_path, selected_branch)
+            self.git_service.switch_branch(project_path, commit_branch)
 
+            metadata["selected_branch"] = commit_branch
             metadata["working_base_commit"] = ""
             metadata["working_mode"] = "normal"
             metadata["selected_commit"] = commit["hash"]
@@ -173,6 +196,7 @@ class ProjectService:
         else:
             self.git_service.checkout_commit_detached(project_path, git_hash)
 
+            metadata["selected_branch"] = commit_branch
             metadata["working_base_commit"] = commit["hash"]
             metadata["working_mode"] = "detached_experiment"
             metadata["selected_commit"] = commit["hash"]
@@ -228,6 +252,8 @@ class ProjectService:
             global_track_id_counter=metadata.get("global_track_id_counter", 0),
         )
 
+        self.ensure_project_gitignore(project_path)
+
         git_commit_hash = self.git_service.create_commit(
             project_path=project_path,
             message=name,
@@ -235,6 +261,12 @@ class ProjectService:
 
         short_hash = git_commit_hash[:8] if git_commit_hash else f"commit{len(metadata['commits']) + 1}"
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+        stored_audio_path = self.audio_snapshot_service.save_commit_audio(
+            project_path=project_path,
+            source_audio_path=audio_path,
+            commit_hash=short_hash,
+        )
 
         previous_commit_hash = parent_commit["hash"] if parent_commit else None
         parent_lane = parent_commit.get("lane", 0) if parent_commit else 0
@@ -246,7 +278,7 @@ class ProjectService:
             "name": name,
             "date": now,
             "comment": comment,
-            "audio_path": audio_path,
+            "audio_path": stored_audio_path,
             "predecessors": [previous_commit_hash] if previous_commit_hash else [],
             "successors": [],
             "lane": parent_lane + 1 if is_branch_commit else parent_lane,
@@ -276,9 +308,64 @@ class ProjectService:
 
     def load_project_metadata(self, project_path):
         return self.project_metadata_repository.load_from_project_folder(project_path)
-    
+
     def compare_commits_for_merge(self, left_commit, right_commit):
         return self.merge_track_service.compare_track_maps(
             left_commit=left_commit,
             right_commit=right_commit
         )
+
+    def ensure_project_gitignore(self, project_path):
+        project_path = Path(project_path).resolve()
+        gitignore_path = project_path / ".gitignore"
+
+        ignore_lines = [
+            "Samples/",
+            ".wavetrace/audio/",
+            "*.asd",
+            ".DS_Store",
+        ]
+
+        if gitignore_path.exists():
+            content = gitignore_path.read_text(encoding="utf-8")
+        else:
+            content = ""
+
+        existing_lines = set(line.strip() for line in content.splitlines())
+
+        changed = False
+
+        for line in ignore_lines:
+            if line not in existing_lines:
+                if content and not content.endswith("\n"):
+                    content += "\n"
+
+                content += f"{line}\n"
+                changed = True
+
+        if changed:
+            gitignore_path.write_text(content, encoding="utf-8")
+
+    def reopen_current_working_als(self, project_path):
+        project_path = Path(project_path).resolve()
+
+        metadata = self.load_project_metadata(project_path)
+
+        if metadata is None:
+            raise RuntimeError("Project metadata could not be loaded.")
+
+        selected_commit_hash = metadata.get("selected_commit", "")
+
+        if not selected_commit_hash:
+            raise RuntimeError("No selected commit found.")
+
+        commit = self.get_commit_by_hash(metadata, selected_commit_hash)
+
+        if commit is None:
+            raise RuntimeError("Selected commit could not be found.")
+
+        als_path = self.resolve_commit_als_path(project_path, commit)
+
+        self.file_open_service.open_file(als_path)
+
+        return str(als_path)

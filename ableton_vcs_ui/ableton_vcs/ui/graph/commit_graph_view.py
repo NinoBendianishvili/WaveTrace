@@ -19,6 +19,7 @@ class CommitGraphView(QGraphicsView):
     commit_selected = Signal(str)
     merge_selection_changed = Signal(list)
     pending_node_selected = Signal(bool)
+    pending_node_action_requested = Signal()
 
     def __init__(self, repository):
         super().__init__()
@@ -89,6 +90,7 @@ class CommitGraphView(QGraphicsView):
         self.node_items = {}
         self.merge_mode = False
         self.merge_selected_hashes = []
+        self.has_pending_changes = False
 
         self.draw_graph()
 
@@ -97,7 +99,83 @@ class CommitGraphView(QGraphicsView):
         self.selected_hash = repository.selected_commit_hash
         self.merge_mode = False
         self.merge_selected_hashes = []
+        self.has_pending_changes = False
         self.draw_graph()
+
+    def set_pending_changes(self, has_pending_changes):
+        self.has_pending_changes = bool(has_pending_changes)
+
+        if not self.has_pending_changes and self.selected_hash == "__pending__":
+            self.selected_hash = self.repository.selected_commit_hash
+
+        self.draw_graph()
+
+    def get_pending_base_hash(self):
+        working_base_commit = self.repository.data.get("working_base_commit", "")
+
+        if working_base_commit:
+            return working_base_commit
+
+        selected_commit = self.repository.data.get("selected_commit", "")
+
+        if selected_commit:
+            return selected_commit
+
+        if self.repository.selected_commit_hash:
+            return self.repository.selected_commit_hash
+
+        if self.repository.commits:
+            return self.repository.commits[-1].get("hash", "")
+
+        return ""
+
+    def graph_commits(self):
+        commits = [dict(commit) for commit in self.repository.commits]
+
+        if not self.has_pending_changes or not commits:
+            return commits
+
+        base_hash = self.get_pending_base_hash()
+
+        if not base_hash:
+            return commits
+
+        base_commit = None
+
+        for commit in commits:
+            if commit.get("hash") == base_hash:
+                base_commit = commit
+                break
+
+        if base_commit is None:
+            return commits
+
+        for commit in commits:
+            if commit.get("hash") == base_hash:
+                successors = list(commit.get("successors", []))
+
+                if "__pending__" not in successors:
+                    successors.append("__pending__")
+
+                commit["successors"] = successors
+                break
+
+        pending_commit = {
+            "hash": "__pending__",
+            "name": "uncommitted changes",
+            "date": "",
+            "comment": "Current project contains changes that are not committed yet.",
+            "audio_path": "",
+            "predecessors": [base_hash],
+            "successors": [],
+            "lane": base_commit.get("lane", 0),
+            "branch": base_commit.get("branch", "MAIN"),
+            "is_pending": True,
+        }
+
+        commits.append(pending_commit)
+
+        return commits
 
     def set_merge_mode(self, enabled):
         self.merge_mode = enabled
@@ -171,7 +249,9 @@ class CommitGraphView(QGraphicsView):
         branch_item = QGraphicsSimpleTextItem(branch_text)
         branch_item.setFont(QFont("Arial", 8, QFont.Bold))
 
-        if branch_text == "MAIN":
+        if commit.get("is_pending"):
+            branch_item.setBrush(QColor(RED))
+        elif branch_text == "MAIN":
             branch_item.setBrush(QColor(TEXT_SECONDARY))
         else:
             branch_item.setBrush(QColor(BRANCH_ALT))
@@ -180,7 +260,7 @@ class CommitGraphView(QGraphicsView):
         self.scene().addItem(branch_item)
 
     def calculate_layout(self):
-        commits = self.repository.commits
+        commits = self.graph_commits()
 
         if not commits:
             self.lane_positions = {}
@@ -278,8 +358,6 @@ class CommitGraphView(QGraphicsView):
             lane: main_x + lane * lane_gap
             for lane in sorted(set(lane_by_hash.values()))
         }
-
-        max_depth = max(depth_by_hash.values()) if depth_by_hash else 0
 
         bottom_y = 540
         vertical_gap = 135
@@ -380,6 +458,16 @@ class CommitGraphView(QGraphicsView):
                 inner.setBrush(QBrush(QColor(lane_color)))
 
     def on_node_click(self, commit_hash):
+        if commit_hash == "__pending__":
+            if self.merge_mode:
+                return
+
+            self.selected_hash = commit_hash
+            self.update_selected_style()
+            self.pending_node_selected.emit(True)
+            self.pending_node_action_requested.emit()
+            return
+
         if self.merge_mode:
             if commit_hash in self.merge_selected_hashes:
                 self.merge_selected_hashes.remove(commit_hash)
@@ -392,17 +480,10 @@ class CommitGraphView(QGraphicsView):
             return
 
         self.selected_hash = commit_hash
-        self.repository.data["selected_commit"] = commit_hash
-        self.repository.selected_commit_hash = commit_hash
 
         self.update_selected_style()
 
-        selected_commit = self.repository.get_commit(commit_hash)
-
-        self.pending_node_selected.emit(
-            bool(selected_commit and selected_commit.get("is_pending"))
-        )
-
+        self.pending_node_selected.emit(False)
         self.commit_selected.emit(commit_hash)
 
     def draw_graph(self):
@@ -498,11 +579,7 @@ class CommitGraphView(QGraphicsView):
 
         self.update_selected_style()
 
-        current_commit = self.repository.get_commit(self.selected_hash)
-
-        self.pending_node_selected.emit(
-            bool(current_commit and current_commit.get("is_pending"))
-        )
+        self.pending_node_selected.emit(self.selected_hash == "__pending__")
 
         max_lane = max(self.lane_positions.keys()) if self.lane_positions else 0
         scene_width = max(1200, self.lane_positions.get(max_lane, 330) + 520)

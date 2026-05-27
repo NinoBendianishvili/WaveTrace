@@ -93,7 +93,7 @@ class MainSurface(GlassCard):
 
         self.repository = CommitRepository(data=metadata)
 
-        self.default_content.set_repository(self.repository)
+        self.default_content.set_repository(self.repository, self.current_folder)
         self.header.set_mode("versioned")
         self.header.set_commit_enabled(True)
         self.show_screen("default")
@@ -179,7 +179,7 @@ class MainSurface(GlassCard):
         if not commit:
             return
 
-        self.default_content.info_panel.set_commit(commit)
+        self.default_content.info_panel.set_commit(commit, self.current_folder)
 
     def handle_merge_selection_changed(self, selected_hashes):
         self.header.set_select_enabled(len(selected_hashes) == 2)
@@ -190,7 +190,7 @@ class MainSurface(GlassCard):
             commit = repo.get_commit(selected_hashes[0])
 
             if commit:
-                self.default_content.info_panel.set_commit(commit)
+                self.default_content.info_panel.set_commit(commit, self.current_folder)
 
         elif len(selected_hashes) == 2:
             first_commit = repo.get_commit(selected_hashes[0])

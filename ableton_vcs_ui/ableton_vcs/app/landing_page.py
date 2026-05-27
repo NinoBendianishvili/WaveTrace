@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QFileDialog,
     QMessageBox,
@@ -25,7 +26,14 @@ class LandingPage(QWidget):
         self.project_service = ProjectService()
 
         self.setAutoFillBackground(True)
+
         self.build_ui()
+        self.refresh_recent_projects()
+
+        self.pending_changes_timer = QTimer(self)
+        self.pending_changes_timer.setInterval(10000)
+        self.pending_changes_timer.timeout.connect(self.refresh_pending_changes)
+        self.pending_changes_timer.start()
 
     def build_ui(self):
         self.setStyleSheet(
@@ -45,7 +53,9 @@ class LandingPage(QWidget):
         self.surface = MainSurface(self.repository, self.project_service)
         root.addWidget(self.surface, 1)
 
-        self.surface.header.browse_button.clicked.connect(self.browse_folder)
+        self.surface.header.browse_folder_requested.connect(self.browse_folder)
+        self.surface.header.recent_project_selected.connect(self.open_recent_project)
+
         self.surface.header.open_button.clicked.connect(self.open_selected_commit)
         self.surface.header.merge_button.clicked.connect(self.merge_action)
         self.surface.header.commit_button.clicked.connect(self.commit_pending_changes)
@@ -53,6 +63,34 @@ class LandingPage(QWidget):
         self.surface.header.select_button.clicked.connect(self.select_merge_commits)
         self.surface.header.merge_confirm_button.clicked.connect(self.commit_merge)
         self.surface.header.initialize_button.clicked.connect(self.surface.request_initialize)
+
+        self.surface.default_content.graph_panel.graph.pending_node_action_requested.connect(
+            self.handle_pending_node_action
+        )
+
+    def refresh_recent_projects(self):
+        recent_projects = self.project_service.get_recent_projects()
+        self.surface.header.set_recent_projects(recent_projects)
+
+    def refresh_pending_changes(self):
+        if self.surface.current_project_state != "versioned":
+            self.surface.default_content.graph_panel.set_pending_changes(False)
+            return
+
+        if not self.surface.current_folder:
+            self.surface.default_content.graph_panel.set_pending_changes(False)
+            return
+
+        try:
+            has_pending_changes = self.project_service.has_uncommitted_changes(
+                self.surface.current_folder
+            )
+        except Exception:
+            has_pending_changes = False
+
+        self.surface.default_content.graph_panel.set_pending_changes(
+            has_pending_changes
+        )
 
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(
@@ -64,6 +102,18 @@ class LandingPage(QWidget):
         if folder:
             self.open_project_folder(folder)
 
+    def open_recent_project(self, folder):
+        if not folder:
+            return
+
+        path = Path(folder).expanduser()
+
+        if not path.exists() or not path.is_dir():
+            self.refresh_recent_projects()
+            return
+
+        self.open_project_folder(str(path))
+
     def open_project_folder(self, folder):
         if not folder:
             return
@@ -71,6 +121,8 @@ class LandingPage(QWidget):
         self.surface.header.folder_input.set_path(folder)
 
         project_state = self.project_service.get_project_state(folder)
+
+        self.refresh_recent_projects()
 
         if project_state == "versioned":
             metadata = self.project_service.load_project_metadata(folder)
@@ -84,9 +136,11 @@ class LandingPage(QWidget):
                 return
 
             self.surface.load_versioned_project(folder, metadata)
+            self.refresh_pending_changes()
 
         elif project_state == "git_only":
             self.surface.load_uninitialized_project(folder)
+            self.refresh_pending_changes()
 
             QMessageBox.information(
                 self,
@@ -96,9 +150,11 @@ class LandingPage(QWidget):
 
         elif project_state == "uninitialized":
             self.surface.load_uninitialized_project(folder)
+            self.refresh_pending_changes()
 
         elif project_state == "not_ableton_project":
             self.surface.load_empty_project(folder)
+            self.refresh_pending_changes()
 
             QMessageBox.information(
                 self,
@@ -108,7 +164,134 @@ class LandingPage(QWidget):
 
         else:
             self.surface.load_empty_project("")
+            self.refresh_pending_changes()
 
+    def handle_pending_node_action(self):
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("Uncommitted changes")
+        message_box.setText("This project has changes that are not committed yet.")
+        message_box.setInformativeText("What do you want to do with these changes?")
+
+        commit_button = message_box.addButton("Commit", QMessageBox.AcceptRole)
+        discard_button = message_box.addButton(
+            "Discard changes",
+            QMessageBox.DestructiveRole
+        )
+        ignore_button = message_box.addButton("Ignore", QMessageBox.RejectRole)
+
+        message_box.exec()
+
+        clicked_button = message_box.clickedButton()
+
+        if clicked_button == commit_button:
+            self.commit_pending_changes()
+            return
+
+        if clicked_button == discard_button:
+            self.discard_pending_changes()
+            return
+
+        if clicked_button == ignore_button:
+            return
+
+    def handle_uncommitted_changes_before_switch(self):
+        try:
+            has_changes = self.project_service.has_uncommitted_changes(
+                self.surface.current_folder
+            )
+        except Exception:
+            has_changes = False
+
+        if not has_changes:
+            return True
+
+        message_box = QMessageBox(self)
+        message_box.setWindowTitle("Uncommitted changes")
+        message_box.setText("You have uncommitted changes.")
+        message_box.setInformativeText(
+            "Before opening another version, choose what to do with the current changes."
+        )
+
+        commit_button = message_box.addButton("Commit", QMessageBox.AcceptRole)
+        discard_button = message_box.addButton(
+            "Discard changes",
+            QMessageBox.DestructiveRole
+        )
+        cancel_button = message_box.addButton("Cancel", QMessageBox.RejectRole)
+
+        message_box.exec()
+
+        clicked_button = message_box.clickedButton()
+
+        if clicked_button == commit_button:
+            return self.commit_pending_changes()
+
+        if clicked_button == discard_button:
+            return self.discard_pending_changes()
+
+        if clicked_button == cancel_button:
+            return False
+
+        return False
+
+    def discard_pending_changes(self):
+        confirm = QMessageBox.question(
+            self,
+            "Discard changes",
+            "This will restore the project files on disk to the version they are currently based on.\n\n"
+            "If this set is open in Ableton, WaveTrace will reopen the restored .als file after reset.\n\n"
+            "Are you sure?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+
+        if confirm != QMessageBox.Yes:
+            return False
+
+        try:
+            self.project_service.discard_uncommitted_changes(
+                self.surface.current_folder
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Discard failed",
+                str(error)
+            )
+            return False
+
+        metadata = self.project_service.load_project_metadata(
+            self.surface.current_folder
+        )
+
+        if metadata is not None:
+            self.surface.load_versioned_project(
+                self.surface.current_folder,
+                metadata
+            )
+
+        self.surface.default_content.graph_panel.set_pending_changes(False)
+
+        try:
+            als_path = self.project_service.reopen_current_working_als(
+                self.surface.current_folder
+            )
+        except Exception as error:
+            QMessageBox.warning(
+                self,
+                "Reopen failed",
+                f"Changes were discarded, but WaveTrace could not reopen the Ableton file:\n{error}"
+            )
+            return True
+
+        QMessageBox.information(
+            self,
+            "Changes discarded",
+            f"Project was reset to the version it was based on.\n\n"
+            f"Reopened Ableton file:\n{als_path}"
+        )
+
+        return True
     def open_selected_commit(self):
         if self.surface.current_project_state != "versioned":
             QMessageBox.information(
@@ -120,6 +303,10 @@ class LandingPage(QWidget):
 
         selected_hash = self.surface.default_content.graph_panel.graph.selected_hash
 
+        if selected_hash == "__pending__":
+            self.handle_pending_node_action()
+            return
+
         if not selected_hash:
             selected_hash = self.surface.repository.selected_commit_hash
 
@@ -129,6 +316,9 @@ class LandingPage(QWidget):
                 "Open",
                 "Please select a commit first."
             )
+            return
+
+        if not self.handle_uncommitted_changes_before_switch():
             return
 
         try:
@@ -144,10 +334,17 @@ class LandingPage(QWidget):
             )
             return
 
-        metadata = self.project_service.load_project_metadata(self.surface.current_folder)
+        metadata = self.project_service.load_project_metadata(
+            self.surface.current_folder
+        )
 
         if metadata is not None:
-            self.surface.load_versioned_project(self.surface.current_folder, metadata)
+            self.surface.load_versioned_project(
+                self.surface.current_folder,
+                metadata
+            )
+
+        self.refresh_pending_changes()
 
         QMessageBox.information(
             self,
@@ -165,7 +362,7 @@ class LandingPage(QWidget):
                 "Commit",
                 "Please open or initialize a WaveTrace project first."
             )
-            return
+            return False
 
         if not self.surface.current_folder:
             QMessageBox.warning(
@@ -173,17 +370,20 @@ class LandingPage(QWidget):
                 "Commit",
                 "No project folder is selected."
             )
-            return
+            return False
 
         dialog = CommitFormDialog("New commit", self)
         dialog.name_input.setPlaceholderText("e.g. vocal level fixes")
         dialog.comment_input.setPlaceholderText("Describe what changed in this version...")
 
         if dialog.exec() != QDialog.Accepted:
-            return
+            return False
 
         commit_name = dialog.name_input.text().strip() or "New commit"
-        commit_comment = dialog.comment_input.toPlainText().strip() or "Committed latest changes."
+        commit_comment = (
+            dialog.comment_input.toPlainText().strip()
+            or "Committed latest changes."
+        )
         wav_path = dialog.selected_wav_path or ""
 
         metadata_before_commit = self.project_service.load_project_metadata(
@@ -192,7 +392,10 @@ class LandingPage(QWidget):
 
         branch_name = None
 
-        if metadata_before_commit and metadata_before_commit.get("working_mode") == "detached_experiment":
+        if (
+            metadata_before_commit
+            and metadata_before_commit.get("working_mode") == "detached_experiment"
+        ):
             branch_name, ok = QInputDialog.getText(
                 self,
                 "Save as branch",
@@ -200,7 +403,7 @@ class LandingPage(QWidget):
             )
 
             if not ok:
-                return
+                return False
 
             branch_name = branch_name.strip()
 
@@ -210,7 +413,7 @@ class LandingPage(QWidget):
                     "Branch name required",
                     "Please enter a branch name to save this version."
                 )
-                return
+                return False
 
         try:
             metadata = self.project_service.create_commit(
@@ -226,18 +429,23 @@ class LandingPage(QWidget):
                 "Commit failed",
                 str(error)
             )
-            return
+            return False
 
         self.surface.load_versioned_project(
             self.surface.current_folder,
             metadata
         )
 
+        self.refresh_recent_projects()
+        self.refresh_pending_changes()
+
         QMessageBox.information(
             self,
             "Commit created",
             "New WaveTrace version was committed successfully."
         )
+
+        return True
 
     def close_merge_mode(self):
         self.surface.exit_merge_mode()

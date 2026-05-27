@@ -19,7 +19,13 @@ class DefaultContent(QWidget):
         content_layout.addWidget(vertical_divider)
         content_layout.addWidget(self.info_panel)
 
-    def set_repository(self, repository):
+    def set_project_path(self, project_path):
+        self.info_panel.set_project_path(project_path)
+
+    def set_repository(self, repository, project_path=""):
+        if project_path:
+            self.set_project_path(project_path)
+
         self.graph_panel.set_repository(repository)
         first_commit = repository.get_commit(repository.selected_commit_hash)
         if first_commit:
