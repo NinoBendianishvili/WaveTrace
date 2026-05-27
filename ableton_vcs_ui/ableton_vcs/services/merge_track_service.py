@@ -14,26 +14,29 @@ class MergeTrackService:
             right_track = right_track_map.get(global_track_id)
 
             if left_track and right_track:
-                row = self.compare_existing_track(
-                    global_track_id,
-                    left_track,
-                    right_track
+                rows.append(
+                    self.compare_existing_track(
+                        global_track_id,
+                        left_track,
+                        right_track
+                    )
                 )
-                rows.append(row)
 
             elif left_track and not right_track:
-                row = self.build_only_left_row(
-                    global_track_id,
-                    left_track
+                rows.append(
+                    self.build_only_left_row(
+                        global_track_id,
+                        left_track
+                    )
                 )
-                rows.append(row)
 
             elif right_track and not left_track:
-                row = self.build_only_right_row(
-                    global_track_id,
-                    right_track
+                rows.append(
+                    self.build_only_right_row(
+                        global_track_id,
+                        right_track
+                    )
                 )
-                rows.append(row)
 
         return rows
 
@@ -46,12 +49,18 @@ class MergeTrackService:
             label = "Same"
         else:
             merge_status = "different_version"
-            label = "Different version"
+            label = "Changed"
+
+        parent_group_global_id = (
+            left_track.get("parent_group_global_id")
+            or right_track.get("parent_group_global_id")
+        )
 
         return {
             "global_track_id": global_track_id,
             "track_name": left_track.get("track_name") or right_track.get("track_name", "Untitled"),
             "track_type": left_track.get("track_type") or right_track.get("track_type", "Unknown"),
+            "parent_group_global_id": parent_group_global_id,
             "merge_status": merge_status,
             "label": label,
             "left": self.build_existing_side(left_track),
@@ -63,8 +72,9 @@ class MergeTrackService:
             "global_track_id": global_track_id,
             "track_name": left_track.get("track_name", "Untitled"),
             "track_type": left_track.get("track_type", "Unknown"),
+            "parent_group_global_id": left_track.get("parent_group_global_id"),
             "merge_status": "only_left",
-            "label": "Missing from right",
+            "label": "Only left",
             "left": self.build_existing_side(left_track),
             "right": {
                 "exists": False,
@@ -76,8 +86,9 @@ class MergeTrackService:
             "global_track_id": global_track_id,
             "track_name": right_track.get("track_name", "Untitled"),
             "track_type": right_track.get("track_type", "Unknown"),
+            "parent_group_global_id": right_track.get("parent_group_global_id"),
             "merge_status": "only_right",
-            "label": "New in right",
+            "label": "Only right",
             "left": {
                 "exists": False,
             },
@@ -91,5 +102,5 @@ class MergeTrackService:
             "track_type": track.get("track_type", "Unknown"),
             "current_version": track.get("current_version", "0001"),
             "status": track.get("status", ""),
-            "ableton_local_id": track.get("ableton_local_id", ""),
+            "parent_group_global_id": track.get("parent_group_global_id"),
         }

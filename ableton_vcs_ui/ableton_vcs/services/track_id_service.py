@@ -28,6 +28,7 @@ class TrackIdService:
 
         new_track_map = {}
         updated_counter = global_track_id_counter
+        local_to_global_id = {}
 
         for track in current_tracks:
             ableton_local_id = str(track["ableton_local_id"])
@@ -43,6 +44,7 @@ class TrackIdService:
                     "track_name": track["track_name"],
                     "current_version": previous_track_data.get("current_version", "0001"),
                     "status": "unchanged",
+                    "parent_group_global_id": None,
                 }
 
             else:
@@ -55,7 +57,28 @@ class TrackIdService:
                     "track_name": track["track_name"],
                     "current_version": "0001",
                     "status": "new",
+                    "parent_group_global_id": None,
                 }
+
+            local_to_global_id[ableton_local_id] = global_track_id
+
+        for track in current_tracks:
+            ableton_local_id = str(track["ableton_local_id"])
+            global_track_id = local_to_global_id.get(ableton_local_id)
+
+            if not global_track_id:
+                continue
+
+            parent_group_local_id = track.get("parent_group_local_id")
+
+            if parent_group_local_id is None:
+                new_track_map[global_track_id]["parent_group_global_id"] = None
+                continue
+
+            parent_group_local_id = str(parent_group_local_id)
+            parent_group_global_id = local_to_global_id.get(parent_group_local_id)
+
+            new_track_map[global_track_id]["parent_group_global_id"] = parent_group_global_id
 
         return {
             "global_track_id_counter": updated_counter,

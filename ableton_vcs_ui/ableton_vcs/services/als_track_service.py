@@ -35,20 +35,44 @@ class AlsTrackService:
 
         return element.tag
 
-    def extract_track_name(self, track_element):
-        for element in track_element.iter():
-            tag_name = self.local_name(element)
-
-            if tag_name in ["UserName", "EffectiveName"]:
+    def get_value_from_descendant(self, parent_element, tag_name):
+        for element in parent_element.iter():
+            if self.local_name(element) == tag_name:
                 value = element.attrib.get("Value")
 
-                if value:
+                if value is not None:
                     return value
+
+        return None
+
+    def extract_track_name(self, track_element):
+        effective_name = self.get_value_from_descendant(track_element, "EffectiveName")
+
+        if effective_name:
+            return effective_name
+
+        user_name = self.get_value_from_descendant(track_element, "UserName")
+
+        if user_name:
+            return user_name
 
         track_type = self.local_name(track_element)
         local_id = track_element.attrib.get("Id", "unknown")
 
         return f"{track_type} {local_id}"
+
+    def extract_parent_group_local_id(self, track_element):
+        track_group_id = self.get_value_from_descendant(track_element, "TrackGroupId")
+
+        if track_group_id is None:
+            return None
+
+        track_group_id = str(track_group_id)
+
+        if track_group_id == "-1":
+            return None
+
+        return track_group_id
 
     def extract_tracks_from_als(self, als_path):
         root = self.load_als_xml_root(als_path)
@@ -70,6 +94,7 @@ class AlsTrackService:
                     "ableton_local_id": str(ableton_local_id),
                     "track_type": tag_name,
                     "track_name": self.extract_track_name(element),
+                    "parent_group_local_id": self.extract_parent_group_local_id(element),
                 }
             )
 
