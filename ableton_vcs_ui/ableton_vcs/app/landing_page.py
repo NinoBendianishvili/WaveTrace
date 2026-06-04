@@ -458,16 +458,60 @@ class LandingPage(QWidget):
         if self.surface.merge_layout_widget is None or not self.surface.merge_layout_widget.isVisible():
             return
 
+        selected_tracks = self.surface.merge_layout_widget.get_selected_tracks()
+
+        left_commit = self.surface.merge_layout_widget.left_commit
+        right_commit = self.surface.merge_layout_widget.right_commit
+
         dialog = CommitFormDialog("New merge commit", self)
         dialog.name_input.setPlaceholderText("e.g. merged vocal branch")
         dialog.comment_input.setPlaceholderText("Describe what this merge includes...")
 
         result = dialog.exec()
 
-        if result == QDialog.Accepted:
-            QMessageBox.information(
-                self,
-                "Demo",
-                "Demo merge committed. Returning to main page."
+        if result != QDialog.Accepted:
+            return
+
+        commit_name = dialog.name_input.text().strip() or "Merge commit"
+        commit_comment = (
+            dialog.comment_input.toPlainText().strip()
+            or f"Merged {left_commit.get('name', 'left')} and {right_commit.get('name', 'right')}."
+        )
+        wav_path = dialog.selected_wav_path or ""
+
+        try:
+            metadata = self.project_service.create_merge_commit(
+                project_path=self.surface.current_folder,
+                left_commit_hash=left_commit["hash"],
+                right_commit_hash=right_commit["hash"],
+                selected_left_global_ids=selected_tracks.get("left", []),
+                selected_right_global_ids=selected_tracks.get("right", []),
+                name=commit_name,
+                comment=commit_comment,
+                audio_path=wav_path,
             )
-            self.surface.exit_merge_mode()
+
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Merge failed",
+                str(error)
+            )
+            return
+
+        self.surface.exit_merge_mode(silent=True)
+        self.surface.load_versioned_project(
+            self.surface.current_folder,
+            metadata,
+        )
+
+        self.refresh_recent_projects()
+
+        if hasattr(self, "refresh_pending_changes"):
+            self.refresh_pending_changes()
+
+        QMessageBox.information(
+            self,
+            "Merge committed",
+            "WaveTrace created a resolved Ableton merge commit successfully."
+        )
