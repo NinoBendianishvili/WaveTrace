@@ -208,6 +208,30 @@ class ProjectService:
 
         return str(als_path)
 
+    def reopen_current_working_als(self, project_path):
+        project_path = Path(project_path).resolve()
+
+        metadata = self.load_project_metadata(project_path)
+
+        if metadata is None:
+            raise RuntimeError("Project metadata could not be loaded.")
+
+        selected_commit_hash = metadata.get("selected_commit", "")
+
+        if not selected_commit_hash:
+            raise RuntimeError("No selected commit found.")
+
+        commit = self.get_commit_by_hash(metadata, selected_commit_hash)
+
+        if commit is None:
+            raise RuntimeError("Selected commit could not be found.")
+
+        als_path = self.resolve_commit_als_path(project_path, commit)
+
+        self.file_open_service.open_file(als_path)
+
+        return str(als_path)
+
     def create_commit(self, project_path, name, comment, audio_path="", metadata=None, branch_name=None):
         project_path = Path(project_path).resolve()
 
@@ -250,6 +274,7 @@ class ProjectService:
             current_tracks=extracted_data["tracks"],
             previous_track_map=previous_track_map,
             global_track_id_counter=metadata.get("global_track_id_counter", 0),
+            metadata=metadata,
         )
 
         self.ensure_project_gitignore(project_path)
@@ -321,6 +346,8 @@ class ProjectService:
 
         ignore_lines = [
             "Samples/",
+            "Backup/",
+            "Ableton Project Info/",
             ".wavetrace/audio/",
             "*.asd",
             ".DS_Store",
@@ -345,27 +372,3 @@ class ProjectService:
 
         if changed:
             gitignore_path.write_text(content, encoding="utf-8")
-
-    def reopen_current_working_als(self, project_path):
-        project_path = Path(project_path).resolve()
-
-        metadata = self.load_project_metadata(project_path)
-
-        if metadata is None:
-            raise RuntimeError("Project metadata could not be loaded.")
-
-        selected_commit_hash = metadata.get("selected_commit", "")
-
-        if not selected_commit_hash:
-            raise RuntimeError("No selected commit found.")
-
-        commit = self.get_commit_by_hash(metadata, selected_commit_hash)
-
-        if commit is None:
-            raise RuntimeError("Selected commit could not be found.")
-
-        als_path = self.resolve_commit_als_path(project_path, commit)
-
-        self.file_open_service.open_file(als_path)
-
-        return str(als_path)

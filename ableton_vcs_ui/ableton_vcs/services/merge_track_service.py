@@ -41,8 +41,8 @@ class MergeTrackService:
         return rows
 
     def compare_existing_track(self, global_track_id, left_track, right_track):
-        left_version = left_track.get("current_version", "0001")
-        right_version = right_track.get("current_version", "0001")
+        left_version = self.get_track_version(left_track)
+        right_version = self.get_track_version(right_track)
 
         if left_version == right_version:
             merge_status = "same"
@@ -100,7 +100,18 @@ class MergeTrackService:
             "exists": True,
             "track_name": track.get("track_name", "Untitled"),
             "track_type": track.get("track_type", "Unknown"),
-            "current_version": track.get("current_version", "0001"),
+            "current_version": self.get_track_version(track),
             "status": track.get("status", ""),
+            "changed_reasons": track.get("changed_reasons", []),
             "parent_group_global_id": track.get("parent_group_global_id"),
+            "child_track_global_ids": track.get("child_track_global_ids", []),
+            "content_fingerprint": track.get("content_fingerprint", ""),
+            "membership_fingerprint": track.get("membership_fingerprint", ""),
         }
+
+    def get_track_version(self, track):
+        return (
+            track.get("current_version")
+            or track.get("track_version")
+            or "0001"
+        )
