@@ -1,4 +1,3 @@
-import json
 from datetime import datetime
 from pathlib import Path
 import shutil
@@ -16,7 +15,6 @@ from ableton_vcs.services.als_merge_service import AlsMergeService
 from ableton_vcs.services.plugin_extractor_service import PluginExtractorService
 
 
-
 class ProjectService:
     def __init__(self):
         self.recent_projects_repository = RecentProjectsRepository()
@@ -30,8 +28,8 @@ class ProjectService:
         self.als_merge_service = AlsMergeService()
         self.plugin_extractor_service = PluginExtractorService()
 
-    def remember_project(self, project_path):
-        self.recent_projects_repository.save_project(project_path)
+    def remember_project(self, project_path, metadata=None):
+        self.recent_projects_repository.save_project(project_path, metadata=metadata)
 
     def get_last_opened_project(self):
         return self.recent_projects_repository.get_last_opened_project()
@@ -57,8 +55,6 @@ class ProjectService:
 
     def get_project_state(self, project_path):
         project_path = Path(project_path)
-
-        self.remember_project(project_path)
 
         if not project_path.exists() or not project_path.is_dir():
             return "invalid"
@@ -108,17 +104,6 @@ class ProjectService:
 
         project_id = self.project_metadata_repository.make_project_id()
 
-        link_data = {
-            "project_id": project_id,
-            "project_name": project_path.name,
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-        }
-
-        link_file = wavetrace_dir / "project.json"
-
-        with link_file.open("w", encoding="utf-8") as file:
-            json.dump(link_data, file, indent=4)
-
         metadata = self.project_metadata_repository.create_empty_project_metadata(
             project_path=project_path,
             project_id=project_id,
@@ -132,7 +117,7 @@ class ProjectService:
             metadata=metadata,
         )
 
-        self.remember_project(project_path)
+        self.remember_project(project_path, metadata=metadata)
 
         return metadata
 
@@ -341,6 +326,49 @@ class ProjectService:
     def load_project_metadata(self, project_path):
         return self.project_metadata_repository.load_from_project_folder(project_path)
 
+
+    def list_plugins_for_commit(self, project_path, commit_hash):
+        project_path = Path(project_path).resolve()
+
+        metadata = self.load_project_metadata(project_path)
+
+        if metadata is None:
+            raise RuntimeError("Project metadata could not be loaded.")
+
+        commit = self.get_commit_by_hash(metadata, commit_hash)
+
+        if commit is None:
+            raise RuntimeError("Selected commit could not be found.")
+
+        git_hash = commit.get("git_hash")
+
+        if not git_hash:
+            raise RuntimeError("Selected commit does not have a Git hash.")
+
+        repo_relative_path = self.get_commit_als_repo_relative_path(commit)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_als_path = Path(temp_dir) / Path(repo_relative_path).name
+
+            self.git_service.get_file_from_commit(
+                project_path=project_path,
+                git_hash=git_hash,
+                repo_relative_path=repo_relative_path,
+                output_path=temp_als_path,
+            )
+
+            return self.plugin_extractor_service.extract_plugins_from_als(temp_als_path)
+
+    def list_plugins_for_current_project(self, project_path):
+        project_path = Path(project_path).resolve()
+
+        als_files = sorted(project_path.glob("*.als"))
+
+        if not als_files:
+            raise FileNotFoundError("No .als file found in the selected project folder.")
+
+        return self.plugin_extractor_service.extract_plugins_from_als(als_files[0])
+
     def compare_commits_for_merge(self, left_commit, right_commit):
         return self.merge_track_service.compare_track_maps(
             left_commit=left_commit,
@@ -355,6 +383,8 @@ class ProjectService:
             "Samples/",
             "Backup/",
             "Ableton Project Info/",
+            ".wavetrace/project.json",
+            ".wavetrace/project.json.tmp",
             ".wavetrace/audio/",
             "*.asd",
             ".DS_Store",
@@ -480,6 +510,8 @@ class ProjectService:
                 destination_als_path = project_path / left_als_repo_path
                 shutil.copyfile(resolved_als_temp, destination_als_path)
 
+                self.ensure_project_gitignore(project_path)
+
                 git_commit_hash = self.git_service.commit_current_merge(
                     project_path=project_path,
                     message=name,
@@ -556,52 +588,3 @@ class ProjectService:
         )
 
         return metadata
-    
-    def get_commit_als_repo_relative_path(self, commit):
-        als_path = commit.get("als_path", "")
-
-        if not als_path:
-            raise RuntimeError("Commit does not store an ALS path.")
-
-        return Path(als_path).name
-
-
-    def list_plugins_for_current_project(self, project_path):
-        project_path = Path(project_path).resolve()
-        als_path = self.als_track_service.find_main_als_file(project_path)
-
-        return self.plugin_extractor_service.extract_plugins_from_als(als_path)
-
-
-    def list_plugins_for_commit(self, project_path, commit_hash):
-        project_path = Path(project_path).resolve()
-
-        metadata = self.load_project_metadata(project_path)
-
-        if metadata is None:
-            raise RuntimeError("Project metadata could not be loaded.")
-
-        commit = self.get_commit_by_hash(metadata, commit_hash)
-
-        if commit is None:
-            raise RuntimeError("Selected commit could not be found.")
-
-        git_hash = commit.get("git_hash")
-
-        if not git_hash:
-            # fallback: current project file
-            return self.list_plugins_for_current_project(project_path)
-
-        als_repo_path = self.get_commit_als_repo_relative_path(commit)
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_als_path = Path(temp_dir) / als_repo_path
-
-            self.git_service.get_file_from_commit(
-                project_path=project_path,
-                git_hash=git_hash,
-                repo_relative_path=als_repo_path,
-                output_path=temp_als_path,
-            )
-
-            return self.plugin_extractor_service.extract_plugins_from_als(temp_als_path)

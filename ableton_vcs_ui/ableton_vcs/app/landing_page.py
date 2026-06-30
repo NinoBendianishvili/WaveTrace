@@ -16,7 +16,7 @@ from ableton_vcs.ui.screens.main_surface import MainSurface
 from ableton_vcs.ui.dialogs.commit_form_dialog import CommitFormDialog
 from ableton_vcs.ui.common.app_title import AppTitle
 from ableton_vcs.services.project_service import ProjectService
-from ableton_vcs.ui.dialogs.plugin_list_dialog import PluginListDialog
+
 
 class LandingPage(QWidget):
     def __init__(self):
@@ -67,7 +67,6 @@ class LandingPage(QWidget):
         self.surface.default_content.graph_panel.graph.pending_node_action_requested.connect(
             self.handle_pending_node_action
         )
-        self.surface.default_content.info_panel.list_plugins_requested.connect(self.show_plugin_list)
 
     def refresh_recent_projects(self):
         recent_projects = self.project_service.get_recent_projects()
@@ -123,8 +122,6 @@ class LandingPage(QWidget):
 
         project_state = self.project_service.get_project_state(folder)
 
-        self.refresh_recent_projects()
-
         if project_state == "versioned":
             metadata = self.project_service.load_project_metadata(folder)
 
@@ -132,11 +129,13 @@ class LandingPage(QWidget):
                 QMessageBox.warning(
                     self,
                     "WaveTrace",
-                    "This project has a WaveTrace link, but its metadata file could not be found."
+                    "This project has a WaveTrace marker, but its project metadata could not be loaded."
                 )
                 return
 
             self.surface.load_versioned_project(folder, metadata)
+            self.project_service.remember_project(folder, metadata=metadata)
+            self.refresh_recent_projects()
             self.refresh_pending_changes()
 
         elif project_state == "git_only":
@@ -516,49 +515,3 @@ class LandingPage(QWidget):
             "Merge committed",
             "WaveTrace created a resolved Ableton merge commit successfully."
         )
-
-    def show_plugin_list(self):
-        if self.surface.current_project_state != "versioned":
-            QMessageBox.information(
-                self,
-                "Plugins",
-                "Please open or initialize a WaveTrace project first."
-            )
-            return
-
-        selected_hash = self.surface.default_content.graph_panel.graph.selected_hash
-
-        if selected_hash == "__pending__":
-            selected_hash = None
-
-        if not selected_hash:
-            selected_hash = self.surface.repository.selected_commit_hash
-
-        try:
-            if selected_hash:
-                plugins = self.project_service.list_plugins_for_commit(
-                    project_path=self.surface.current_folder,
-                    commit_hash=selected_hash,
-                )
-                commit = self.surface.repository.get_commit(selected_hash)
-                commit_name = commit.get("name", selected_hash) if commit else selected_hash
-            else:
-                plugins = self.project_service.list_plugins_for_current_project(
-                    self.surface.current_folder
-                )
-                commit_name = "Current working project"
-
-        except Exception as error:
-            QMessageBox.critical(
-                self,
-                "Plugin extraction failed",
-                str(error)
-            )
-            return
-
-        dialog = PluginListDialog(
-            plugins=plugins,
-            commit_name=commit_name,
-            parent=self,
-        )
-        dialog.exec()

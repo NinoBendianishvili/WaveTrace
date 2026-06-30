@@ -7,6 +7,7 @@ from ableton_vcs.ui.common.empty_state import EmptyStateWidget
 from ableton_vcs.ui.header.header_bar import HeaderBar
 from ableton_vcs.ui.screens.default_content import DefaultContent
 from ableton_vcs.ui.dialogs.commit_form_dialog import CommitFormDialog
+from ableton_vcs.ui.dialogs.plugin_list_dialog import PluginListDialog
 from ableton_vcs.ui.merge.merge_placeholder import MergePlaceholder
 
 
@@ -71,6 +72,9 @@ class MainSurface(GlassCard):
         )
 
         self.uninitialized_widget.button.clicked.connect(self.request_initialize)
+        self.default_content.info_panel.list_plugins_requested.connect(
+            self.show_plugins_for_selected_commit
+        )
 
         self.load_empty_project("")
 
@@ -166,6 +170,7 @@ class MainSurface(GlassCard):
             return
 
         self.load_versioned_project(self.current_folder, metadata)
+        self.header.set_recent_projects(self.project_service.get_recent_projects())
 
         QMessageBox.information(
             self,
@@ -207,6 +212,100 @@ class MainSurface(GlassCard):
 
             if selected_hash:
                 self.handle_commit_selected(selected_hash)
+
+
+    def get_commit_hash_for_plugin_listing(self):
+        graph = self.default_content.graph_panel.graph
+        selected_hash = graph.selected_hash
+
+        if graph.merge_mode:
+            if len(graph.merge_selected_hashes) == 1:
+                selected_hash = graph.merge_selected_hashes[0]
+            elif len(graph.merge_selected_hashes) > 1:
+                return ""
+
+        if not selected_hash:
+            selected_hash = self.active_repository().selected_commit_hash
+
+        return selected_hash or ""
+
+    def show_plugins_for_selected_commit(self):
+        if self.current_project_state != "versioned":
+            QMessageBox.information(
+                self,
+                "List Plugins",
+                "Please open or initialize a WaveTrace project first."
+            )
+            return
+
+        if not self.current_folder:
+            QMessageBox.information(
+                self,
+                "List Plugins",
+                "Please select a project folder first."
+            )
+            return
+
+        selected_hash = self.get_commit_hash_for_plugin_listing()
+
+        if selected_hash == "__pending__":
+            try:
+                plugins = self.project_service.list_plugins_for_current_project(
+                    self.current_folder
+                )
+            except Exception as error:
+                QMessageBox.critical(
+                    self,
+                    "Plugin scan failed",
+                    str(error)
+                )
+                return
+
+            dialog = PluginListDialog(
+                plugins,
+                "Uncommitted changes",
+                self
+            )
+            dialog.exec()
+            return
+
+        if not selected_hash:
+            QMessageBox.information(
+                self,
+                "List Plugins",
+                "Please select a commit first."
+            )
+            return
+
+        commit = self.active_repository().get_commit(selected_hash)
+
+        if commit is None:
+            QMessageBox.information(
+                self,
+                "List Plugins",
+                "Selected commit could not be found."
+            )
+            return
+
+        try:
+            plugins = self.project_service.list_plugins_for_commit(
+                project_path=self.current_folder,
+                commit_hash=selected_hash,
+            )
+        except Exception as error:
+            QMessageBox.critical(
+                self,
+                "Plugin scan failed",
+                str(error)
+            )
+            return
+
+        dialog = PluginListDialog(
+            plugins,
+            commit.get("name", "Selected commit"),
+            self
+        )
+        dialog.exec()
 
     def enter_merge_mode(self):
         if self.current_project_state != "versioned":

@@ -87,7 +87,7 @@ class HeaderBar(QWidget):
 
         self.set_recent_projects([])
 
-    def set_recent_projects(self, project_paths):
+    def set_recent_projects(self, recent_projects):
         self.browse_menu.clear()
 
         browse_action = QAction("Browse new folder...", self)
@@ -96,31 +96,64 @@ class HeaderBar(QWidget):
 
         self.browse_menu.addSeparator()
 
-        if not project_paths:
+        if not recent_projects:
             empty_action = QAction("No recent projects yet", self)
             empty_action.setEnabled(False)
             self.browse_menu.addAction(empty_action)
             return
 
-        for project_path in project_paths:
-            path = Path(project_path).expanduser()
+        for recent_project in recent_projects:
+            entry = self.normalize_recent_project(recent_project)
+
+            if entry is None:
+                continue
+
+            path = Path(entry["path"]).expanduser()
             exists = path.exists() and path.is_dir()
 
-            label = self.make_recent_project_label(path, exists)
+            label = self.make_recent_project_label(entry, path, exists)
             action = QAction(label, self)
             action.setEnabled(exists)
 
             if exists:
                 action.triggered.connect(
-                    lambda checked=False, selected_path=str(project_path): self.recent_project_selected.emit(selected_path)
+                    lambda checked=False, selected_path=str(path): self.recent_project_selected.emit(selected_path)
                 )
             else:
                 action.setToolTip("This project folder was not found in this location anymore.")
 
             self.browse_menu.addAction(action)
 
-    def make_recent_project_label(self, path, exists):
-        project_name = path.name or str(path)
+    def normalize_recent_project(self, recent_project):
+        if isinstance(recent_project, dict):
+            project_path = str(recent_project.get("path", "")).strip()
+
+            if not project_path:
+                return None
+
+            return {
+                "path": project_path,
+                "project_name": recent_project.get("project_name", ""),
+                "ableton_set_file": recent_project.get("ableton_set_file", ""),
+            }
+
+        project_path = str(recent_project or "").strip()
+
+        if not project_path:
+            return None
+
+        return {
+            "path": project_path,
+            "project_name": Path(project_path).name,
+            "ableton_set_file": "",
+        }
+
+    def make_recent_project_label(self, entry, path, exists):
+        project_name = entry.get("project_name") or path.name or str(path)
+        ableton_set_file = entry.get("ableton_set_file", "")
+
+        if ableton_set_file:
+            project_name = f"{project_name} ({ableton_set_file})"
 
         if exists:
             return f"{project_name}    {path}"
