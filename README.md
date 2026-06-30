@@ -119,5 +119,5 @@ WaveTrace is mainly designed for local version management and portable project f
 
 - Ableton audio samples are not duplicated into every version.
 - Audio previews must currently be exported manually from Ableton and attached in WaveTrace.
-- The packaged `.dmg` file is not stored in the source repository. It should be uploaded separately through GitHub Releases.
-EOF
+- The packaged `.dmg` file is not stored in the source repository. It is uploaded separately through GitHub Releases.
+
