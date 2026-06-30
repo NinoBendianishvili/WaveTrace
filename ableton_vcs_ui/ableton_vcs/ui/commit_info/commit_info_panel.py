@@ -1,12 +1,16 @@
-from PySide6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
+from PySide6.QtCore import Signal
+from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ableton_vcs.config.theme import *
 from ableton_vcs.ui.common.glass_card import GlassCard
+from ableton_vcs.ui.common.pill_button import PillButton
 from ableton_vcs.ui.commit_info.info_row import InfoRow
 from ableton_vcs.ui.commit_info.audio_player_card import AudioPlayerCard
 
 
 class CommitInfoPanel(GlassCard):
+    list_plugins_requested = Signal()
+
     def __init__(self):
         super().__init__(radius=26, border_color=BORDER, bg_color=BG_PANEL)
 
@@ -21,10 +25,17 @@ class CommitInfoPanel(GlassCard):
             f"color: {TEXT_PRIMARY}; font-size: 24px; font-weight: 700;"
         )
 
+        self.list_plugins_button = PillButton("List Plugins", compact=True)
+        self.list_plugins_button.setFixedHeight(30)
+        self.list_plugins_button.clicked.connect(self.list_plugins_requested.emit)
+
         title_wrap = QWidget()
-        title_layout = QVBoxLayout(title_wrap)
+        title_layout = QHBoxLayout(title_wrap)
         title_layout.setContentsMargins(28, 28, 28, 24)
+        title_layout.setSpacing(12)
         title_layout.addWidget(title)
+        title_layout.addStretch()
+        title_layout.addWidget(self.list_plugins_button)
 
         divider1 = QFrame()
         divider1.setFrameShape(QFrame.HLine)
