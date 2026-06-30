@@ -1,4 +1,3 @@
-cat > README.md <<'EOF'
 # WaveTrace
 
 WaveTrace is a desktop application for Git-based version management of Ableton Live project folders. It provides a graphical interface for creating versions, browsing commit history, switching between versions, attaching audio previews, and merging track-level changes in Ableton Live projects.
